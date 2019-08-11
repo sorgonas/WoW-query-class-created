@@ -1,0 +1,821 @@
+<?php
+error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_STRICT);
+class WOW{
+    // -----------------------
+    // KONFIGURATION
+    // -----------------------
+
+        // Client-ID und Secret von (https://develop.battle.net/access/clients)
+        private $clientid = 'EURE-CLIENT-ID'; // Client-ID
+        private $secret = 'EUER-CLIENT-SECRET'; // Client-Secret
+
+        // WoW-Gilden-Infos
+        private $apiREGION = 'EURE-WOW-REGION'; // Region von eurer Gilde
+        private $apiLOCALE = 'EURE-WOW-SPRACHE'; // Sprache von eurer Gilde
+        private $guildRealm = 'EUER-GILDEN-SERVER'; // Auf welchem Server ist Gilde registriert?
+        private $guild = EUER-GILDENNAME'; // Name der Gilde
+
+        // Datenbank Konfiguration
+        public $DBUSER = 'DATENBANK-BENUTZERNAME'; // Datenbank-Username
+        public $DBPASS = 'DATENBANK-PASSWORT'; // Datenbank-Passwort
+        public $DBNAME = ' DATENBANK-NAME'; // Datenbank-Name
+        public $DBHOST = 'DATENBANK-SERVER'; // Datenbank-Serveradresse
+
+    // ------------------------------
+    // AB HIER NICHTS MEHR ÄNDERN !!!
+    // ------------------------------
+        private $apiToken;
+
+        public $gilde;
+        public $char;
+
+        public $recipes;
+        public $items;
+    // ----------------------------
+    // Beim Start ausführen
+    // ----------------------------
+    public function __construct() {  
+        $this->getApiToken();
+        $this->gildenINFO();
+    }
+
+    // API-Token von Blizzard abrufen
+    private function getApiToken(){
+        $url = 'https://eu.battle.net/oauth/token?grant_type=client_credentials&client_id='.$this->clientid.'&client_secret='.$this->secret;
+        
+        $curl = curl_init($url);
+        curl_setopt($curl, CURLOPT_URL, $url);
+        curl_setopt($curl, CURLOPT_ENCODING, "gzip,deflate");
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, TRUE);
+        
+        $output = curl_exec($curl);
+        $httpcode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        curl_close($curl);
+        
+        $result = json_decode($output, true);
+        if(isset($result['access_token'])){
+            return $this->apiToken = $result['access_token'];
+        } else {
+            usleep(500000); // 5 Sekunden Pause wenn Token-Abfrage fehlschlägt, danach ...
+            $this->getApiToken(); // ... funktion neu aufrufen
+        }
+    }
+
+    // Daten von Blizzard abrufen
+    private function getData($table, $fields, $abfrage){
+        $apiUrl = 'https://'.$this->apiREGION.'.api.blizzard.com/wow/'.$table;
+
+        if($table === 'recipe' || $table === 'item'){
+            $sHttpQuery = array(
+                'locale' => $this->apiLOCALE,
+                'access_token' => $this->apiToken
+            );
+            $url = $apiUrl.'/'.$abfrage.'?'.http_build_query($sHttpQuery);
+        }
+        else{
+            $sHttpQuery = array(
+                'locale' => $this->apiLOCALE,
+                'fields' => $fields,
+                'access_token' => $this->apiToken
+            );
+            $url = $apiUrl.'/'.rawurlencode($this->guildRealm).'/'.$abfrage.'?'.http_build_query($sHttpQuery);
+        }
+
+        //  Initiate curl
+        $ch = curl_init($url);
+        // Will return the response, if false it print the response
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        // Set the url
+        curl_setopt($ch, CURLOPT_URL,$url);
+        // Execute
+        $result=curl_exec($ch);
+        // Closing
+        curl_close($ch);
+
+        // Will dump a beauty json :3
+        return json_decode($result, true);
+    }
+
+    // Infos von der Gilde und Grunddaten der Member abrufen
+    function gildenINFO(){
+        $guildData = $this->getData('guild', 'news, members', rawurlencode($this->guild));
+        echo '<pre>';
+        //print_r($guildData);
+        echo '</pre>';
+
+        $memberCount = count($guildData['members']);
+
+        if ( !sizeof($guildData)) {
+            die('Es wurden keine Gildendaten gefunden.');
+        }
+        else{
+            $this->gilde = array(
+                'name' => $guildData['name'],
+                'realm' => $guildData['realm'],
+                'level' => $guildData['level'],
+                'side' => $guildData['side'],
+                'achievementPoints' => $guildData['achievementPoints'],
+                'members' => $memberCount,
+                'icon' => $guildData['emblem'],
+                'news' => $guildData['news'],
+            );
+
+            
+            for($i = 0; $i < $memberCount; $i++){
+                $member = $guildData['members'][$i]['character'];
+                $rank = $guildData['members'][$i]['rank'];
+                $this->charInfos($member, $rank);
+            }
+        }
+    }
+
+    // Zusätzliche Daten von den Chars abrufen
+    function charInfos($member, $rank){
+        $memberData = $this->getData('character', 'talents,professions,items', urlencode(html_entity_decode($member['name'], ENT_COMPAT, 'UTF-8')));
+
+        $charId = (int)preg_replace('#(\w+\/\d+\/(\d+)\-avatar\.jpg)#', '\\2', $member['thumbnail']);
+        $picture = preg_replace('/avatar/', 'main', $member['thumbnail']);
+        $this->char[] = array(
+            'charID' => $charId,
+            'name' => $member['name'],
+            'realm' => $member['realm'],
+            'class' => $member['class'],
+            'race' => $member['race'],
+            'gender' => $member['gender'],
+            'level' => $member['level'],
+            'achievementPoints' => $member['achievementPoints'],
+            'avatar' => $member['thumbnail'],
+            'picture' => $picture,
+            'spec' => $member['spec'],
+            'rang' => $rank,
+            'items' => $this->char_items($memberData),
+            'professions' => $memberData['professions'],
+            'talents' => $memberData['talents']
+        );
+    }
+
+    // Char-Items abrufen
+    function char_items($memberData){
+        $armorArray = array('head', 'neck', 'shoulder', 'back', 'chest', 'shirt', 'tabard', 'wrist', 'hands', 'waist', 'legs', 'feet',
+                            'finger1', 'finger2', 'trinket1', 'trinket2', 'mainHand', 'offHand');
+        
+        $armor = array(
+                'averageItemLevel' => (int)$memberData['items']['averageItemLevel'],
+                'averageItemLevelEquipped' => (int)$memberData['items']['averageItemLevelEquipped'],
+            );
+
+        for($aCount=0; $aCount < 18; $aCount++){
+                    $armor[$armorArray[$aCount]] = array(
+                        'itemID' => (int)$memberData['items'][$armorArray[$aCount]]['id'],
+                        'name' => trim($memberData['items'][$armorArray[$aCount]]['name']),
+                        'icon' => trim($memberData['items'][$armorArray[$aCount]]['icon']),
+                        'quality' => (int)$memberData['items'][$armorArray[$aCount]]['quality'],
+                        'itemLevel' => (int)$memberData['items'][$armorArray[$aCount]]['itemLevel'],
+                        
+                    );
+                    if($memberData['items'][$armorArray[$aCount]]['id'] != 0){
+                        $this->items[] = (int)$memberData['items'][$armorArray[$aCount]]['id'];
+                    }
+                }
+                return $armor;
+    }
+
+    function load_recipes($rezeptID){
+        $recipesData = $this->getData('recipe', '', $rezeptID);
+        return $recipesData;
+    }
+
+    function load_items($itemID){
+        $itemData = $this->getData('item', '', $itemID);
+        return $itemData;
+    }
+}
+
+
+class WriteData EXTENDS WOW{
+    
+    // ------------------------------
+    // AB HIER NICHTS MEHR ÄNDERN !!!
+    // ------------------------------
+
+    // Variablen für die Datenbank
+    public static $db = null;
+    public static $insertID;
+
+    // Variablen für die ausgelesenen Daten;
+    public $wow;
+    public $items;
+    public $recipes;
+
+    public $gilde;
+    public $chars;
+
+    function __construct(){
+        $this->wow = new WOW();
+        $this->gilde = $this->wow->gilde;
+        $this->chars = $this->wow->char;
+        $this->items = $this->wow->items;
+        self::initDB($this->DBHOST, $this->DBUSER, $this->DBPASS, $this->DBNAME); // Datenbank-Verbindung herstellen  
+        $this->setDbTables(); // Datenbank-Tabellen erstellen (wenn nicht vorhanden)
+        $this->writeGildenDaten(); // Gilden-Daten schreiben
+        $this->writeCharDaten(); // Char-Daten Schreiben
+    }
+
+    // --------------------------------------------
+    // DATENBANK-VERBINDUNG UND SCHREIBEN DER DATEN
+    // --------------------------------------------
+
+    //Datenbank-Verbindung Initialisieren
+    public static function initDB($dbHost, $dbUser, $dbPassword, $dbName){
+        self::$db = new mysqli($dbHost, $dbUser, $dbPassword, $dbName);
+        if (self::$db->connect_errno) {
+            print_r($_SESSION['errors'][] = "MySQL Verbindung fehlgeschlagen: ". self::$db->connect_error);
+        }
+        self::$db->query("SET NAMES utf8;");
+    }
+
+    public static function query($sql, $debug = false){
+        $result = self::$db->query($sql);
+        if ($debug ==true){
+            $_SESSION['debug'][] = __function__ . ': $sql ist <strong>'.$sql.'</strong>';
+        }
+        if (self::$db->errno){
+            $_SESSION['errors'][] = '<p>insert fehlgeschlagen: ' . self::$db->error . '<br> Aussage war: <strong> $sql </strong></p>';
+        }
+        return $result;
+    }
+
+    // Datenbank-Tabellen erstellen (wenn nicht vorhanden)
+    private function setDbTables(){
+        // Tabelle guild erstellen (wenn nicht vorhanden)
+        self::$db->query("
+        CREATE TABLE IF NOT EXISTS `guild` (
+        `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+        `name` varchar(64) NOT NULL,
+        `realm` varchar(64) NOT NULL,
+        `level` int(3) unsigned NOT NULL DEFAULT '0',
+        `side` int(1) unsigned NOT NULL DEFAULT '0',
+        `achievementPoints` int(6) unsigned NOT NULL DEFAULT '0',
+        `members` int(3) unsigned NOT NULL DEFAULT '0',
+        `icon` int(3) unsigned NOT NULL DEFAULT '0',
+        `iconColor` varchar(64) NOT NULL,
+        `iconColorId` int(3) unsigned NOT NULL DEFAULT '0',
+        `border` int(3) unsigned NOT NULL DEFAULT '0',
+        `borderColor` varchar(64) NOT NULL,
+        `borderColorId` int(3) unsigned NOT NULL DEFAULT '0',
+        `backgroundColor` varchar(64) NOT NULL,
+        `backgroundColorId` int(3) unsigned NOT NULL DEFAULT '0',
+        `updated` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (`id`),
+        KEY `idx_name` (`name`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+        ");
+
+        // Tabelle guild_news erstellen (wenn nicht vorhanden)
+        self::$db->query("
+        CREATE TABLE IF NOT EXISTS `guild_news` (
+        `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+        `name` varchar(64) NOT NULL,
+        `erfolg` varchar(255) NOT NULL,
+        `erhalten` int(15) unsigned NOT NULL,
+        `itemId` int(15) unsigned NOT NULL,
+        `beschreibung` varchar(255) NOT NULL,
+        `achievID` int(15) unsigned NOT NULL,
+        `achievTitel` varchar(255) NOT NULL,
+        `achievPunkte` int(15) unsigned NOT NULL,
+        `achievBeschreibung` varchar(255) NOT NULL,
+        `achievIcon` varchar(255) NOT NULL,
+        `achievName` varchar(255) NOT NULL,
+        PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+        ");
+        
+        // Tabelle chars erstellen (wenn nicht vorhanden)
+        self::$db->query("
+        CREATE TABLE IF NOT EXISTS `chars` (
+        `charID` int(10) unsigned NOT NULL,
+        `name` varchar(64) NOT NULL,
+        `realm` varchar(64) NOT NULL,
+        `class` int(3) unsigned NOT NULL DEFAULT '0',
+        `race` int(3) unsigned NOT NULL DEFAULT '0',
+        `gender` int(3) unsigned NOT NULL DEFAULT '0',
+        `level` int(3) unsigned NOT NULL DEFAULT '0',
+        `achievementPoints` int(5) unsigned NOT NULL DEFAULT '0',
+        `avatar` varchar(255) NOT NULL,
+        `picture` varchar(255) NOT NULL,
+        `specName` varchar(255) DEFAULT '',
+        `specIcon` varchar(255) DEFAULT '',
+        `rang` int(3) unsigned NOT NULL DEFAULT '0',
+        PRIMARY KEY (`charID`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+        ");
+
+        // Tabelle items erstellen (wenn nicht vorhanden)
+        self::$db->query("
+        CREATE TABLE IF NOT EXISTS `items` (
+        `ItemID` int(10) unsigned NOT NULL,
+        `name` varchar(255) NOT NULL,
+        `icon` varchar(64) NOT NULL,
+        `quality` int(1) unsigned NOT NULL DEFAULT '0',
+        `itemLevel` int(4) unsigned NOT NULL DEFAULT '0',
+        PRIMARY KEY (`ItemID`),
+        UNIQUE KEY `ItemID` (`ItemID`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+        ");
+
+        // Tabelle char_recipes erstellen (wenn nicht vorhanden)
+        self::$db->query("
+        CREATE TABLE IF NOT EXISTS `char_recipes` (
+        `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
+        `charID` int(10) unsigned NOT NULL,
+        `rezeptID` int(10) unsigned NOT NULL,
+        `beruf` varchar(64) NOT NULL,
+        PRIMARY KEY (`id`),
+        UNIQUE KEY charID (charID,rezeptID)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+        ");
+
+        // Tabelle recipes erstellen (wenn nicht vorhanden)
+        self::$db->query("
+        CREATE TABLE IF NOT EXISTS `recipes` (
+        `id` int(10) unsigned NOT NULL,
+        `name` varchar(255) NOT NULL,
+        `profession` varchar(255) NOT NULL,
+        `icon` varchar(255) NOT NULL,
+        PRIMARY KEY (`id`),
+        UNIQUE KEY `id` (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+        ");
+
+        // Tabelle char_talents erstellen (wenn nicht vorhanden)
+        self::$db->query("
+        CREATE TABLE IF NOT EXISTS `char_talents` (
+        `charID` int(10) unsigned NOT NULL,
+        `talents0bild` varchar(255) NOT NULL,
+        `talents0name` varchar(255) NOT NULL,
+        `talents0spec` varchar(255) NOT NULL,
+        `talents1bild` varchar(255) NOT NULL,
+        `talents1name` varchar(255) NOT NULL,
+        `talents1spec` varchar(255) NOT NULL,
+        `talents2bild` varchar(255) NOT NULL,
+        `talents2name` varchar(255) NOT NULL,
+        `talents2spec` varchar(255) NOT NULL,
+        PRIMARY KEY (`charID`),
+        UNIQUE KEY `charID` (`charID`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+        ");
+
+        // Tabelle char_professions erstellen (wenn nicht vorhanden)
+        self::$db->query("
+        CREATE TABLE IF NOT EXISTS `char_professions` (
+        `charID` int(10) unsigned NOT NULL,
+        `professionspri0bild` varchar(64) NOT NULL,
+        `professionspri0lvl` int(3) unsigned DEFAULT '0',
+        `professionspri0maxlvl` int(3) unsigned DEFAULT '0',
+        `professionspri0name` varchar(64) NOT NULL,
+        `professionspri1bild` varchar(255) NOT NULL,
+        `professionspri1lvl` int(3) unsigned DEFAULT '0',
+        `professionspri1maxlvl` int(3) unsigned DEFAULT '0',
+        `professionspri1name` varchar(64) NOT NULL,
+        `professionssec0bild` varchar(255) NOT NULL,
+        `professionssec0lvl` int(3) unsigned DEFAULT '0',
+        `professionssec0maxlvl` int(3) unsigned DEFAULT '0',
+        `professionssec0name` varchar(64) NOT NULL,
+        `professionssec1bild` varchar(255) NOT NULL,
+        `professionssec1lvl` int(3) unsigned DEFAULT '0',
+        `professionssec1maxlvl` int(3) unsigned DEFAULT '0',
+        `professionssec1name` varchar(64) NOT NULL,
+        `professionssec2bild` varchar(255) NOT NULL,
+        `professionssec2lvl` int(3) unsigned DEFAULT '0',
+        `professionssec2maxlvl` int(3) unsigned DEFAULT '0',
+        `professionssec2name` varchar(64) NOT NULL,
+        `professionssec3bild` varchar(255) NOT NULL,
+        `professionssec3lvl` int(3) unsigned DEFAULT '0',
+        `professionssec3maxlvl` int(3) unsigned DEFAULT '0',
+        `professionssec3name` varchar(64) NOT NULL,
+        PRIMARY KEY (`charID`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+        ");
+
+        // Tabelle char_items erstellen (wenn nicht vorhanden)
+        self::$db->query("
+        CREATE TABLE IF NOT EXISTS `char_items` (
+        `charID` int(10) unsigned NOT NULL,
+        `head` int(6) unsigned DEFAULT '0',
+        `neck` int(6) unsigned DEFAULT '0',
+        `shoulder` int(6) unsigned DEFAULT '0',
+        `back` int(6) unsigned DEFAULT '0',
+        `chest` int(6) unsigned DEFAULT '0',
+        `shirt` int(6) unsigned DEFAULT '0',
+        `tabard` int(6) unsigned DEFAULT '0',
+        `wrist` int(6) unsigned DEFAULT '0',
+        `hands` int(6) unsigned DEFAULT '0',
+        `waist` int(6) unsigned DEFAULT '0',
+        `legs` int(6) unsigned DEFAULT '0',
+        `feet` int(6) unsigned DEFAULT '0',
+        `finger1` int(6) unsigned DEFAULT '0',
+        `finger2` int(6) unsigned DEFAULT '0',
+        `trinket1` int(6) unsigned DEFAULT '0',
+        `trinket2` int(6) unsigned DEFAULT '0',
+        `mainHand` int(6) unsigned DEFAULT '0',
+        `offHand` int(6) unsigned DEFAULT '0',
+        `averageItemLevel` int(3) unsigned DEFAULT '0',
+        `averageItemLevelEquipped` int(3) unsigned DEFAULT '0',
+        PRIMARY KEY (`charID`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+        ");
+
+        // Tabelle guild leeren
+        self::$db->query('TRUNCATE `guild`');
+
+        // Tabelle guild_news leeren
+        self::$db->query('TRUNCATE `guild_news`');
+
+        // Tabelle char leeren
+        self::$db->query('TRUNCATE `chars`');
+
+        // Tabelle char_talents leeren
+        self::$db->query('TRUNCATE `char_talents`');
+
+        // Tabelle char_professions leeren
+        self::$db->query('TRUNCATE `char_professions`');
+
+        // Tabelle char_items leeren
+        self::$db->query('TRUNCATE `char_items`');
+    }
+
+    // Daten in die Datenbank schreiben
+    public static function insert($table, $data, $debug = false){
+        $keys = ""; $values = "";
+        foreach ($data as $key => $value){
+            $key = self::escape($key);
+            $value = self::escape($value);
+            $keys .= $key . ", ";
+            if ($value == null){
+                $values .= "null, ";
+            }
+            else{
+                $values .= "'" . $value . "', ";
+            }
+        }
+
+        $keys = rtrim($keys, ', ');
+
+        $values = rtrim($values, ', ');
+
+        $sql = "INSERT INTO $table (" . $keys . ") VALUES (" . $values . ")";
+
+        if ($debug == true){
+            $_SESSION['debug'][] = __function__ . ': $sql ist <strong>' . $sql . '</strong>';
+        }
+
+        self::$db->query($sql);
+
+        if (self::$db->errno){
+            $_SESSION['errors'][] = '<p>' . __function__ . ' Fehlgeschlagen: ' . self::$db->error . '<br> Aussage war: <strong> ' . $sql . '</strong></p>';
+        }
+
+        self::$insertID = self::$db->insert_id;
+    }
+
+    //Daten in der Datenbank aktualisieren
+    public static function update($table, $id, $data, $debug = false){
+        $sql = "UPDATE $table SET ";
+        foreach ($data as $key => $value){
+            $key = self::escape($key);
+            $value = self::escape($value);
+            if ($value == null){
+                $sql .= "$key = null, ";
+            }
+            else{
+                $sql .= "$key = '$value', ";
+            }
+        }
+
+        $sql = rtrim($sql, ", ");
+
+        $sql .= " WHERE " . self::getPrimaryKeyColumn($table) . " = $id";
+
+        if ($debug == true){
+            $_SESSION['debug'][] =__function__ . ': $sql ist <strong>' . $sql . '</strong>';
+        }
+
+        self::$db->query($sql);
+
+        if (self::$db->errno){
+            $_SESSION['errors'][] = '<p>' . __function__ . ' fehlgeschlagen: ' . self::$db->error . '<br> Aussage war: <strong> ' . $sql . '</strong></p>';
+        }
+    }
+
+    // Daten in die Datenbank schreiben
+    public static function replace($table, $data, $debug = false){
+        $keys = ""; $values = "";
+        foreach ($data as $key => $value){
+            $key = self::escape($key);
+            $value = self::escape($value);
+            $keys .= $key . ", ";
+            if ($value == null){
+                $values .= "null, ";
+            }
+            else{
+                $values .= "'" . $value . "', ";
+            }
+        }
+
+        $keys = rtrim($keys, ', ');
+
+        $values = rtrim($values, ', ');
+
+        $sql = "REPLACE INTO $table (" . $keys . ") VALUES (" . $values . ")";
+
+        if ($debug == true){
+            $_SESSION['debug'][] = __function__ . ': $sql ist <strong>' . $sql . '</strong>';
+        }
+
+        self::$db->query($sql);
+
+        if (self::$db->errno){
+            $_SESSION['errors'][] = '<p>' . __function__ . ' Fehlgeschlagen: ' . self::$db->error . '<br> Aussage war: <strong> ' . $sql . '</strong></p>';
+        }
+
+        self::$insertID = self::$db->insert_id;
+    }
+
+    public static function escape($string){
+        return self::$db->real_escape_string($string);
+    }
+
+    function writeGildenDaten(){
+        $guildData = $this->gilde;
+        
+        if ( !sizeof($guildData)) {
+            die('Es wurden keine Gildendaten gefunden.');
+        }
+        else{
+            // Gilden-Grund-Daten in die Datenbank schreiben
+            self::insert('guild', array(
+                    'name' => trim($guildData['name']),
+                    'realm' => trim($guildData['realm']),
+                    'level' => (int)$guildData['level'],
+                    'side' => (int)$guildData['side'],
+                    'achievementPoints' => (int)$guildData['achievementPoints'],
+                    'members' => (int)$guildData['members'],
+                    'icon' => (int)$guildData['icon']['icon'],
+                    'iconColor' => trim($guildData['icon']['iconColor']),
+                    'iconColorId' => (int)$guildData['icon']['iconColorId'],
+                    'border' => (int)$guildData['icon']['border'],
+                    'borderColor' => trim($guildData['icon']['borderColor']),
+                    'borderColorId' => (int)$guildData['icon']['borderColorId'],
+                    'backgroundColor' => trim($guildData['icon']['backgroundColor']),
+                    'backgroundColorId' => (int)$guildData['icon']['backgroundColorId'],
+                )
+            );
+
+            foreach($guildData['news'] AS $gnews){
+                if($gnews['type'] == 'itemLoot' || $gnews['type'] == 'itemPurchase'){
+                    self::insert('guild_news', array(
+                        'name' => trim($gnews['character']),
+                        'erfolg' => trim($gnews['type']),
+                        'erhalten' => (int)$gnews['timestamp'],
+                        'itemId' => (int)$gnews['itemId'],
+                        'beschreibung' => trim($gnews['context']),
+                        )
+                    );
+                }
+                elseif($gnews['type'] == 'guildAchievement'){    
+                    self::insert('guild_news', array(
+                        'name' => trim($gnews['character']),
+                        'erfolg' => trim($gnews['type']),
+                        'erhalten' => (int)$gnews['timestamp'],
+                        'achievID' => (int)$gnews['achievement']['id'],
+                        'acievTitel' => trim($gnews['achievement']['title']),
+                        'achievPunkte' => (int)$gnews['achievement']['points'],
+                        'achievBeschreibung' => trim($gnews['achievement']['description']),
+                        'achievIcon' => trim($gnews['achievement']['icon']),
+                        )
+                    );
+                }
+                elseif($gnews['type'] == 'playerAchievement'){
+                    self::insert('guild_news', array(
+                        'name' => trim($gnews['character']),
+                        'erfolg' => trim($gnews['type']),
+                        'erhalten' => (int)$gnews['timestamp'],
+                        'achievID' => (int)$gnews['achievement']['id'],
+                        'acievTitel' => trim($gnews['achievement']['title']),
+                        'achievPunkte' => (int)$gnews['achievement']['points'],
+                        'achievBeschreibung' => trim($gnews['achievement']['description']),
+                        'achievIcon' => trim($gnews['achievement']['icon']),
+                        'achievName' => trim($gnews['achievement']['criteria'][0]['description']),
+                        )
+                    );
+                }
+            }
+        }
+    }
+
+    function writeCharDaten(){
+        $char_count = count($this->chars);
+
+        for($i = 0; $i < $char_count; $i++){
+            $this->char_grunddaten($this->chars[$i]);
+            $this->char_item($this->chars[$i]['items'], $this->chars[$i]['charID']);
+            $this->char_professions($this->chars[$i]['professions'], $this->chars[$i]['charID']);
+            $this->char_talents($this->chars[$i]['talents'], $this->chars[$i]['charID']);
+        }
+        $this->write_recipes();
+        $this->write_items();
+    }
+
+    function char_grunddaten($char){
+        self::insert('chars', array(
+                'charID' => (int)$char['charID'],
+                'name' => trim($char['name']),
+                'realm' => trim($char['realm']),
+                'class' => (int)$char['class'],
+                'race' => (int)$char['race'],
+                'gender' => (int)$char['gender'],
+                'level' => (int)$char['level'],
+                'achievementPoints' => (int)$char['achievementPoints'],
+                'avatar' => trim($char['avatar']),
+                'picture' => trim($char['picture']),
+                'specName' => trim($char['spec']['name']),
+                'specIcon' => trim($char['spec']['icon']),
+                'rang' => (int)$char['rang'],
+            )
+        );
+    }
+
+    function char_item($items, $charID){
+        self::insert('char_items', array(
+                'charID' => (int)$charID,
+                'head' => (int)$items['head']['itemID'],
+                'neck' => (int)$items['neck']['itemID'],
+                'shoulder' => (int)$items['shoulder']['itemID'],
+                'back' => (int)$items['back']['itemID'],
+                'chest' => (int)$items['chest']['itemID'],
+                'shirt' => (int)$items['shirt']['itemID'],
+                'tabard' => (int)$items['tabard']['itemID'],
+                'wrist' => (int)$items['wrist']['itemID'],
+                'hands' => (int)$items['hands']['itemID'],
+                'waist' => (int)$items['waist']['itemID'],
+                'legs' => (int)$items['legs']['itemID'],
+                'feet' => (int)$items['feet']['itemID'],
+                'finger1' => (int)$items['finger1']['itemID'],
+                'finger2' => (int)$items['finger2']['itemID'],
+                'trinket1' => (int)$items['trinket1']['itemID'],
+                'trinket2' => (int)$items['trinket2']['itemID'],
+                'mainHand' => (int)$items['mainHand']['itemID'],
+                'offHand' => (int)$items['offHand']['itemID'],
+                'averageItemLevel' => (int)$items['averageItemLevel'],
+                'averageItemLevelEquipped' => (int)$items['averageItemLevelEquipped'],
+            )
+        );
+    }
+
+    function char_professions($professions, $charID){
+        $data_primary = $professions['primary'];
+        $data_second = $professions['secondary'];
+        $primary_count = count($data_primary);
+        $secondary_count = count($data_primary);
+        
+        if($primary_count === 2){
+            foreach($data_primary as $data){
+                if(isset($data['recipes'][0])){
+                    for($i=0; $i < count($data['recipes']); $i++){
+                        self::replace('char_recipes', array(
+                            'charID' => (int)$charID,
+                            'rezeptID' => (int)$data['recipes'][$i],
+                            'beruf' => trim($data['name']),
+                            )
+                        );
+                        $this->recipes['primary'] = $data['recipes'];
+                    } 
+                }
+                $prof_value[] = $data;
+            }
+        }
+        elseif($primary_count == NULL ){
+        }
+        else{
+            foreach($data_primary as $primary){
+                if(isset($primary['recipes'][0]) || $primary['id'] == '182' || $primary['id'] == '393'){
+                    if(isset($primary['recipes'][0])){
+                        for($i=0; $i < count($primary['recipes']); $i++){
+                            self::replace('char_recipes', array(
+                                'charID' => (int)$charID,
+                                'rezeptID' => (int)$primary['recipes'][$i],
+                                'beruf' => trim($primary['name']),
+                                )
+                            );
+                            $this->recipes['primary'] = $primary['recipes'];
+                        } 
+                    }
+                    $prof_value[] = $primary;
+                }
+            }
+        }
+        
+        foreach($data_second as $secondary){
+            if($secondary['id'] == '129' || $secondary['id'] == '185' || $secondary['id'] == '356' || $secondary['id'] == '794'){
+                if(isset($secondary['recipes'][0])){
+                    for($i=0; $i < count($secondary['recipes']); $i++){
+                        self::replace('char_recipes', array(
+                            'charID' => (int)$charID,
+                            'rezeptID' => (int)$secondary['recipes'][$i],
+                            'beruf' => trim($secondary['name']),
+                            )
+                        );
+                        $this->recipes['secondary'] = $secondary['recipes'];
+                    } 
+                }
+                $prof_value[] = $secondary;
+            }
+        }
+        
+        for($i = 0; $i < count($prof_value); $i++){
+            self::insert('char_professions', array(
+                'charID' => (int)$charID,
+                'professionspri0bild' => trim($prof_value[0]['icon']),
+                'professionspri0lvl' => (int)$prof_value[0]['rank'],
+                'professionspri0maxlvl' => (int)$prof_value[0]['max'],
+                'professionspri0name' => trim($prof_value[0]['name']),
+                'professionspri1bild' => trim($prof_value[1]['icon']),
+                'professionspri1lvl' => (int)$prof_value[1]['rank'],
+                'professionspri1maxlvl' => $prof_value[1]['max'],
+                'professionspri1name' => trim($prof_value[1]['name']),
+                'professionssec0bild' => trim($prof_value[2]['icon']),
+                'professionssec0lvl' => (int)$prof_value[2]['rank'],
+                'professionssec0maxlvl' => (int)$prof_value[2]['max'],
+                'professionssec0name' => trim($prof_value[2]['name']),
+                'professionssec1bild' => trim($prof_value[3]['icon']),
+                'professionssec1lvl' => (int)$prof_value[3]['rank'],
+                'professionssec1maxlvl' => (int)$prof_value[3]['max'],
+                'professionssec1name' => trim($prof_value[3]['name']),
+                'professionssec2bild' => trim($prof_value[4]['icon']),
+                'professionssec2lvl' => (int)$prof_value[4]['rank'],
+                'professionssec2maxlvl' => (int)$prof_value[4]['max'],
+                'professionssec2name' => trim($prof_value[4]['name']),
+                )
+            );
+        }
+    }
+
+    function char_talents($talents, $charID){
+            self::insert('char_talents', array(
+                'charID' => (int)$charID,
+                'talents0bild' => trim($talents[0]['spec']['icon']),
+                'talents0name' => trim($talents[0]['spec']['name']),
+                'talents0spec' => trim($talents[0]['spec']['role']),
+                'talents1bild' => trim($talents[1]['spec']['icon']),
+                'talents1name' => trim($talents[1]['spec']['name']),
+                'talents1spec' => trim($talents[1]['spec']['role']),
+                'talents2bild' => trim($talents[2]['spec']['icon']),
+                'talents2name' => trim($talents[2]['spec']['name']),
+                'talents2spec' => trim($talents[2]['spec']['role']),
+            )
+        );
+    }
+
+    function write_recipes(){
+        $recip_prim = count($this->recipes['primary']);
+        $recip_sec = count($this->recipes['secondary']);
+
+        for($i=0; $i < $recip_prim; $i++){
+            $rezData = $this->wow->load_recipes($this->recipes['primary'][$i]);
+            self::replace('recipes', array(
+                    'id' => (int)$rezData['id'],
+                    'name' => trim($rezData['name']),
+                    'profession' => trim($rezData['profession']),
+                    'icon' => trim($rezData['icon']),
+                )
+            );
+        }
+        for($j=0; $j < $recip_sec; $j++){
+            $rezData = $this->wow->load_recipes($this->recipes['secondary'][$j]);
+            self::replace('recipes', array(
+                    'id' => (int)$rezData['id'],
+                    'name' => trim($rezData['name']),
+                    'profession' => trim($rezData['profession']),
+                    'icon' => trim($rezData['icon']),
+                )
+            );
+        }
+    }
+
+    function write_items(){
+        $items_count = count($this->items);
+        for($i=0; $i < $items_count; $i++){
+            $item = $this->wow->load_items($this->items[$i]);
+            self::replace('items', array(
+                    'ItemID' => (int)$item['id'],
+                    'name' => trim($item['name']),
+                    'icon' => trim($item['icon']),
+                    'quality' => (int)$item['quality'],
+                    'itemLevel' => (int)$item['itemLevel'],
+                )
+            );
+        }
+    }
+}
+
+$data = new WriteData();
