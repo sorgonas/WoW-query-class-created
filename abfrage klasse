@@ -1,0 +1,156 @@
+<?php
+error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_STRICT);
+class WOW{
+    // -----------------------
+    // KONFIGURATION
+    // -----------------------
+
+        // Client-ID und Secret von (https://develop.battle.net/access/clients)
+        private $clientid = 'EURE-ID'; // Client-ID
+        private $secret = 'EUER-SECRET'; // Client-Secret
+
+        // WoW-Gilden-Infos
+        private $apiREGION = 'EURE-REGION'; // Region von eurer Gilde (eu, us ...)
+        private $apiLOCALE = 'EURE-SPRACHE'; // Sprache von eurer Gilde (de_DE, us-US ...)
+        private $guildRealm = 'EUER-SERVER'; // Auf welchem Server ist Gilde registriert? (Lothar, Arygos ...)
+        private $guild = 'EUER-GILDENNAME'; // Name der Gilde
+
+    // ------------------------------
+    // AB HIER NICHTS MEHR ÄNDERN !!!
+    // ------------------------------
+        private $apiToken;
+
+        public $gilde;
+        public $char;
+
+
+    // ----------------------------
+    // Beim Start ausführen
+    // ----------------------------
+    public function __construct() {  
+        $this->getApiToken();
+        $this->gildenINFO();
+    }
+
+    // API-Token von Blizzard abrufen
+    private function getApiToken(){
+        $url = 'https://eu.battle.net/oauth/token?grant_type=client_credentials&client_id='.$this->clientid.'&client_secret='.$this->secret;
+        
+        $curl = curl_init($url);
+        curl_setopt($curl, CURLOPT_URL, $url);
+        curl_setopt($curl, CURLOPT_ENCODING, "gzip,deflate");
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, TRUE);
+        
+        $output = curl_exec($curl);
+        $httpcode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        curl_close($curl);
+        
+        $result = json_decode($output, true);
+        if(isset($result['access_token'])){
+            return $this->apiToken = $result['access_token'];
+        } else {
+            die("Failed to get access token.");
+        }
+    }
+
+    // Daten von Blizzard abrufen
+    private function getData($table, $fields, $abfrage){
+        $apiUrl = 'https://'.$this->apiREGION.'.api.blizzard.com/wow/'.$table;
+
+        $sHttpQuery = array(
+            'locale' => $this->apiLOCALE,
+            'fields' => $fields,
+            'access_token' => $this->apiToken
+        );
+
+        $url = $apiUrl.'/'.rawurlencode($this->guildRealm).'/'.$abfrage.'?'.http_build_query($sHttpQuery);
+        //  Initiate curl
+        $ch = curl_init($url);
+        // Will return the response, if false it print the response
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        // Set the url
+        curl_setopt($ch, CURLOPT_URL,$url);
+        // Execute
+        $result=curl_exec($ch);
+        // Closing
+        curl_close($ch);
+
+        // Will dump a beauty json :3
+        return json_decode($result, true);
+    }
+
+    // Infos von der Gilde und Grunddaten der Member abrufen
+    function gildenINFO(){
+        $guildData = $this->getData('guild', 'news, members', rawurlencode($this->guild));
+        echo '<pre>';
+        //print_r($guildData);
+        echo '</pre>';
+
+        $memberCount = count($guildData['members']);
+
+        if ( !sizeof($guildData)) {
+            die('Es wurden keine Gildendaten gefunden.');
+        }
+        else{
+            $this->gilde = array(
+                'name' => $guildData['name'],
+                'realm' => $guildData['realm'],
+                'level' => $guildData['level'],
+                'side' => $guildData['side'],
+                'achievementPoints' => $guildData['achievementPoints'],
+                'members' => $memberCount,
+                'icon' => $guildData['emblem'],
+                'news' => $guildData['news'],
+            );
+
+            
+            for($i = 0; $i < $memberCount; $i++){
+                $member = $guildData['members'][$i]['character'];
+                $rank = $guildData['members'][$i]['rank'];
+                $this->charInfos($member, $rank);
+            }
+        }
+    }
+
+    // Zusätzliche Daten von den Chars abrufen
+    function charInfos($member, $rank){
+        $memberData = $this->getData('character', 'talents,professions,items', urlencode(html_entity_decode($member['name'], ENT_COMPAT, 'UTF-8')));
+
+        $charId = (int)preg_replace('#(\w+\/\d+\/(\d+)\-avatar\.jpg)#', '\\2', $member['thumbnail']);
+        $picture = preg_replace('/avatar/', 'main', $member['thumbnail']);
+        $this->char[] = array(
+            'charID' => $charId,
+            'name' => $member['name'],
+            'realm' => $member['realm'],
+            'class' => $member['class'],
+            'race' => $member['race'],
+            'gender' => $member['gender'],
+            'level' => $member['level'],
+            'achievementPoints' => $member['achievementPoints'],
+            'avatar' => $member['thumbnail'],
+            'picture' => $picture,
+            'spec' => $member['spec'],
+            'rang' => $rank,
+            'items' => $this->char_items($memberData),
+            'professions' => $memberData['professions'],
+            'talents' => $memberData['talents']
+        );
+    }
+
+    // Char-Items abrufen
+    function char_items($memberData){
+        $armorArray = array('head', 'neck', 'shoulder', 'back', 'chest', 'shirt', 'tabard', 'wrist', 'hands', 'waist', 'legs', 'feet',
+                            'finger1', 'finger2', 'trinket1', 'trinket2', 'mainHand', 'offHand');
+        
+        for($aCount=0; $aCount < 18; $aCount++){
+                    $armor[$armorArray[$aCount]] = array(
+                        'itemID' => $memberData['items'][$armorArray[$aCount]]['id'],
+                        'name' => $memberData['items'][$armorArray[$aCount]]['name'],
+                        'icon' => $memberData['items'][$armorArray[$aCount]]['icon'],
+                        'quality' => $memberData['items'][$armorArray[$aCount]]['quality'],
+                        'itemLevel' => $memberData['items'][$armorArray[$aCount]]['itemLevel']
+                    );
+                }
+                return $armor;
+    }
+}
